@@ -17,13 +17,28 @@
 #include "khash.h"
 #include "table.h"
 
-const char p2_banner[] = "p2 " P2_VERSION
-                             " (date='" POTION_DATE "', commit='" POTION_COMMIT
-                             "', platform='" POTION_PLATFORM "', jit=%d)\n";
+#ifdef POTION_JIT_TARGET
+#define P2_BANNER(jit) "p2 " P2_VERSION \
+  " (date='" POTION_DATE "', commit='" POTION_COMMIT \
+  "', platform='" POTION_PLATFORM \
+  "', jit=%d/" jit \
+  ")\n"
+#else
+#define P2_BANNER(nojit) "p2 " P2_VERSION \
+  " (date='" POTION_DATE "', commit='" POTION_COMMIT \
+  "', platform='" POTION_PLATFORM \
+  "', jit=%d" \
+  ")\n"
+#endif
+
+const char p2_banner[]  = P2_BANNER(_XSTR(POTION_JIT_NAME));
 const char p2_version[] = P2_VERSION;
 
+// POTION_JIT 1/0 if jit is default
+// POTION_JIT_TARGET defined if jittable
 static void p2_cmd_usage(Potion *P) {
   printf("usage: p2 [options] [script] [arguments]\n"
+#ifdef POTION_JIT_TARGET
       "  -B, --bytecode     run with bytecode VM (slower, but cross-platform)"
 #if !POTION_JIT
 	 " (default)\n"
@@ -36,20 +51,21 @@ static void p2_cmd_usage(Potion *P) {
 #else
 	 "\n"
 #endif
+#endif
       "  -Idirectory        add library search path\n"
-//    "  -c                 check script and exit\n"
-//    "  -d                 run program under the debugger\n"
-//    "  -e script          execute string\n"
-//    "  -E script          execute string with extended features enabled\n"
+//    "  -c                 check script and exit\n"          // TODO:
+//    "  -d                 run program under the debugger\n" // TODO: run p2d or do it internally?
+//    "  -e script          execute string\n" // todo:
+//    "  -E script          execute string with extended features enabled\n" // TODO: add a "use p2;"
       "  -V, --verbose      print bytecode and ast info\n"
       "  -h, --help         print this usage info and exit\n"
       "  -v, --version      print version, patchlevel and features and exit\n"
       "  --inspect          print the return value\n"
       "  --stats            print statistics and exit\n"
       "  --compile          compile the script to bytecode and exit\n"
-//    "  --compile-c        compile the script to C and exit\n" // or use p2c?
+//    "  --compile-c        compile the script to C and exit\n" // TODO: or use p2c?
 #if POTION_JIT
-//    "  --compile-exec     compile the script to native executable and exit\n"
+//    "  --compile-exec     compile the script to native executable and exit\n" // TODO: 2st via C, then direct
 #endif
   );
 }
@@ -94,34 +110,27 @@ static void p2_cmd_compile(Potion *P, char *filename, int exec, int verbose) {
     } else {
       code = p2_parse(P, buf);
       if (!code || PN_TYPE(code) == PN_TERROR) {
-        potion_send(potion_send(code, PN_string), PN_print);
+        potion_p(P, code);
         goto done;
       }
       if (verbose > 1) {
         printf("\n-- parsed --\n");
-        potion_send(potion_send(code, PN_string), PN_print);
-        printf("\n");
+        potion_p(P, code);
       }
       code = potion_send(code, PN_compile, potion_str(P, filename), PN_NIL);
       if (verbose > 1)
         printf("\n-- compiled --\n");
     }
-    if (verbose > 1) {
-      potion_send(potion_send(code, PN_string), PN_print);
-      printf("\n");
-    }
+    if (verbose > 1) potion_p(P, code);
     if (exec == 1) {
       code = potion_vm(P, code, P->lobby, PN_NIL, 0, NULL);
       if (verbose > 1)
         printf("\n-- vm returned %p (fixed=%ld, actual=%ld, reserved=%ld) --\n", (void *)code,
           PN_INT(potion_gc_fixed(P, 0, 0)), PN_INT(potion_gc_actual(P, 0, 0)),
           PN_INT(potion_gc_reserved(P, 0, 0)));
-      if (verbose) {
-        potion_send(potion_send(code, PN_string), PN_print);
-        printf("\n");
-      }
+      if (verbose) potion_p(P, code);
     } else if (exec == 2) {
-#if POTION_JIT == 1
+#ifdef POTION_JIT_TARGET
       PN val;
       PN cl = potion_closure_new(P, (PN_F)potion_jit_proto(P, code, verbose), PN_NIL, 1);
       PN_CLOSURE(cl)->data[0] = code;
@@ -130,10 +139,7 @@ static void p2_cmd_compile(Potion *P, char *filename, int exec, int verbose) {
         printf("\n-- jit returned %p (fixed=%ld, actual=%ld, reserved=%ld) --\n", PN_PROTO(code)->jit,
           PN_INT(potion_gc_fixed(P, 0, 0)), PN_INT(potion_gc_actual(P, 0, 0)),
           PN_INT(potion_gc_reserved(P, 0, 0)));
-      if (verbose) {
-        potion_send(potion_send(val, PN_string), PN_print);
-        printf("\n");
-      }
+      if (verbose) potion_p(P, val);
 #else
       fprintf(stderr, "** p2 built without JIT support\n");
 #endif
@@ -256,22 +262,17 @@ int main(int argc, char *argv[]) {
     p2_cmd_compile(P, argv[argc-1], exec, verbose);
   } else {
     if (!exec || verbose) potion_fatal("no filename given");
-    // todo: not yet parsed
+    // TODO: p5 not yet parsed
     p2_eval(P, potion_byte_str(P,
-      "load 'readline';\n" \
-      "while(1){\n" \
-      "  $code = readline('>> ');\n" \
-      "  if (!$code) {\n" \
-      "    print \"\\n\"; break;\n" \
-      "  } else {\n" \
-      "    $obj = eval $code;\n" \
-      "    if (obj kind == Error) {\n" \
-      "      print obj;\n" \
-      "    } else {\n" \
-      "      say '=> '; say $obj;\n" \
-      "    }\n"
-      "  }\n"
-      "}"), exec - 1);
+      "p2::load 'readline';" \
+      "while ($code = readline('>> ')) {" \
+      "  $obj = eval $code;" \
+      "  if ($@) {" \
+      "    say $@;" \
+      "  } else {" \
+      "    say '=> ', $obj;" \
+      "  }"
+      "}"), exec - 1); // 1/2 => 0/1
   }
 END:
   if (P != NULL)

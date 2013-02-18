@@ -21,6 +21,7 @@ GREG = tools/greg${EXE}
 
 STRIP ?= `./tools/config.sh ${CC} strip`
 
+ifeq (${JIT},1)
 ifneq (${DEBUG},0)
 # http://udis86.sourceforge.net/ x86 16,32,64 bit
 # port install udis86
@@ -55,6 +56,7 @@ else
 ifeq ($(shell ./tools/config.sh "${CC}" lib -ldisasm libdis.h /usr/local),1)
 	DEFINES += -I/usr/local/include -DHAVE_LIBDISASM -DJIT_DEBUG
 	LIBS += -L/usr/local/lib -ldisasm
+endif
 endif
 endif
 endif
@@ -169,7 +171,8 @@ config.inc: tools/config.sh config.mak
 	@${ECHO} "# created by ${MAKE} -f config.mak" >> config.inc
 	@${MAKE} -s -f config.mak config.inc.echo >> $@
 	@${MAKE} -s -f config.mak -B core/config.h
-	@${CAT} core/config.h | ${SED} '/POTION_JIT_TARGET /!d; s,#define POTION_JIT_TARGET POTION_\(\w*\),\nJIT_\1 = 1,g' >> $@
+	@${CAT} core/config.h | ${SED} "/POTION_JIT_TARGET /!d;" | \
+	  ${SED} "s,\(.*JIT_TARGET \)POTION_\(.*\),JIT_\2 = 1," >> $@
 
 # Force sync with config.inc
 core/config.h: core/version.h tools/config.sh config.mak
@@ -177,7 +180,7 @@ core/config.h: core/version.h tools/config.sh config.mak
 	@${CAT} core/version.h > core/config.h
 	@${MAKE} -s -f config.mak config.h.echo >> core/config.h
 
-core/version.h: .git/$(shell git show-ref HEAD | ${SED} "s/^.* //;")
+core/version.h: $(shell git show-ref HEAD | ${SED} "s,^.* ,.git/,g")
 	@${ECHO} MAKE $@
 	@${ECHO} "/* created by ${MAKE} -f config.mak */" > core/version.h
 	@${ECHO} -n "#define POTION_DATE   \"" >> core/version.h
